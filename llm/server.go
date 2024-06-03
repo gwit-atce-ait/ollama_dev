@@ -521,72 +521,92 @@ func (s *llmServer) Ping(ctx context.Context) error {
 }
 
 func (s *llmServer) WaitUntilRunning(ctx context.Context) error {
-	start := time.Now()
-	stallDuration := 5 * time.Minute            // If no progress happens
-	finalLoadDuration := 5 * time.Minute        // After we hit 100%, give the runner more time to come online
-	stallTimer := time.Now().Add(stallDuration) // give up if we stall
+    start := time.Now()
+    stallDuration := 5 * time.Minute            // If no progress happens
+    finalLoadDuration := 5 * time.Minute        // After we hit 100%, give the runner more time to come online
+    stallTimer := time.Now().Add(stallDuration) // give up if we stall
 
-	slog.Info("waiting for llama runner to start responding")
-	var lastStatus ServerStatus = -1
-	fullyLoaded := false
+    slog.Info("waiting for llama runner to start responding")
+    var lastStatus ServerStatus = -1
+    fullyLoaded := false
 
-	for {
-		select {
-		case <-ctx.Done():
-			slog.Warn("client connection closed before server finished loading, aborting load")
-			return fmt.Errorf("timed out waiting for llama runner to start: %w", ctx.Err())
-		case err := <-s.done:
-			msg := ""
-			if s.status != nil && s.status.LastErrMsg != "" {
-				msg = s.status.LastErrMsg
-			}
-			return fmt.Errorf("llama runner process has terminated: %v %s", err, msg)
-		default:
-		}
-		if time.Now().After(stallTimer) {
-			// timeout
-			msg := ""
-			if s.status != nil && s.status.LastErrMsg != "" {
-				msg = s.status.LastErrMsg
-			}
-			return fmt.Errorf("timed out waiting for llama runner to start - progress %0.2f - %s", s.loadProgress, msg)
-		}
-		if s.cmd.ProcessState != nil {
-			msg := ""
-			if s.status != nil && s.status.LastErrMsg != "" {
-				msg = s.status.LastErrMsg
-			}
-			return fmt.Errorf("llama runner process no longer running: %d %s", s.cmd.ProcessState.ExitCode(), msg)
-		}
-		ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-		defer cancel()
-		priorProgress := s.loadProgress
-		status, _ := s.getServerStatus(ctx)
-		if lastStatus != status && status != ServerStatusReady {
-			// Only log on status changes
-			slog.Info("waiting for server to become available", "status", status.ToString())
-		}
-		switch status {
-		case ServerStatusReady:
-			s.loadDuration = time.Since(start)
-			slog.Info(fmt.Sprintf("llama runner started in %0.2f seconds", s.loadDuration.Seconds()))
-			return nil
-		default:
-			lastStatus = status
-			// Reset the timer as long as we're making forward progress on the load
-			if priorProgress != s.loadProgress {
-				slog.Debug(fmt.Sprintf("model load progress %0.2f", s.loadProgress))
-				stallTimer = time.Now().Add(stallDuration)
-			} else if !fullyLoaded && int(s.loadProgress*100.0) >= 100 {
-				slog.Debug("model load completed, waiting for server to become available", "status", status.ToString())
-				stallTimer = time.Now().Add(finalLoadDuration)
-				fullyLoaded = true
-			}
-			time.Sleep(time.Millisecond * 250)
-			continue
-		}
-	}
+    var lastProgressLogTime time.Time
+
+    for {
+        select {
+        case <-ctx.Done():
+            slog.Warn("client connection closed before server finished loading, aborting load")
+            return fmt.Errorf("timed out waiting for llama runner to start: %w", ctx.Err())
+        case err := <-s.done:
+            msg := ""
+            if s.status != nil && s.status.LastErrMsg != "" {
+                msg = s.status.LastErrMsg
+            }
+            return fmt.Errorf("llama runner process has terminated: %v %s", err, msg)
+        default:
+        }
+        if time.Now().After(stallTimer) {
+            // timeout
+            msg := ""
+            if s.status != nil && s.status.LastErrMsg != "" {
+                msg = s.status.LastErrMsg
+            }
+            return fmt.Errorf("timed out waiting for llama runner to start - progress %0.2f - %s", s.loadProgress, msg)
+        }
+        if s.cmd.ProcessState != nil {
+            msg := ""
+            if s.status != nil && s.status.LastErrMsg != "" {
+                msg = s.status.LastErrMsg
+            }
+            return fmt.Errorf("llama runner process no longer running: %d %s", s.cmd.ProcessState.ExitCode(), msg)
+        }
+        ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+        defer cancel()
+        priorProgress := s.loadProgress
+        status, _ := s.getServerStatus(ctx)
+        if lastStatus != status && status != ServerStatusReady {
+            // Only log on status changes
+            slog.Info("waiting for server to become available", "status", status.ToString())
+        }
+        switch status {
+        case ServerStatusReady:
+            s.loadDuration = time.Since(start)
+            slog.Info(fmt.Sprintf("llama runner started in %0.2f seconds", s.loadDuration.Seconds()))
+            return nil
+        default:
+            lastStatus = status
+            // Reset the timer as long as we're making forward progress on the load
+            if priorProgress != s.loadProgress {
+                now := time.Now()
+                delta := now.Sub(lastProgressLogTime).Seconds()
+                logMemoryUsage()
+                slog.Debug(fmt.Sprintf("model load progress %0.2f (delta %0.2f seconds)", s.loadProgress, delta))
+                lastProgressLogTime = now
+                stallTimer = time.Now().Add(stallDuration)
+            } else if !fullyLoaded && int(s.loadProgress*100.0) >= 100 {
+                slog.Debug("model load completed, waiting for server to become available", "status", status.ToString())
+                stallTimer = time.Now().Add(finalLoadDuration)
+                fullyLoaded = true
+            }
+            time.Sleep(time.Millisecond * 250)
+            continue
+        }
+    }
 }
+
+func logMemoryUsage() {
+    var m runtime.MemStats
+    runtime.ReadMemStats(&m)
+    slog.Debug(fmt.Sprintf("Alloc = %v MiB", bToMb(m.Alloc)))
+    slog.Debug(fmt.Sprintf("TotalAlloc = %v MiB", bToMb(m.TotalAlloc)))
+    slog.Debug(fmt.Sprintf("Sys = %v MiB", bToMb(m.Sys)))
+    slog.Debug(fmt.Sprintf("NumGC = %v", m.NumGC))
+}
+
+func bToMb(b uint64) uint64 {
+    return b / 1024 / 1024
+}
+
 
 const jsonGrammar = `
 root   ::= object
