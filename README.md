@@ -6,7 +6,7 @@
 
 [![Discord](https://dcbadge.vercel.app/api/server/ollama?style=flat&compact=true)](https://discord.gg/ollama)
 
-Get up and running with large language models locally.
+Get up and running with large language models.
 
 ### macOS
 
@@ -285,6 +285,7 @@ See the [API documentation](./docs/api.md) for all endpoints.
 - [macai](https://github.com/Renset/macai) (macOS client for Ollama, ChatGPT, and other compatible API back-ends)
 - [Olpaka](https://github.com/Otacon/olpaka) (User-friendly Flutter Web App for Ollama)
 - [OllamaSpring](https://github.com/CrazyNeil/OllamaSpring) (Ollama Client for macOS)
+- [LLocal.in](https://github.com/kartikm7/llocal) (Easy to use Electron Desktop Client for Ollama)
 
 ### Terminal
 
